@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { MinutesWallet } from './types';
 
 const DEFAULT_MINUTES = 7;
@@ -18,7 +18,12 @@ export async function initializeMinutesWallet(userId: string): Promise<MinutesWa
       };
       
       await setDoc(walletRef, newWallet);
-      return newWallet;
+      
+      // Return a version with a real Timestamp for the client
+      return {
+        ...newWallet,
+        lastUpdated: Timestamp.now(),
+      };
     }
     
     return wallet.data() as MinutesWallet;
