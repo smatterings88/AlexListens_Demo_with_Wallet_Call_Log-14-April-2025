@@ -19,12 +19,6 @@ const nextConfig = {
         pathname: '/avatar/**',
       }
     ],
-  },
-  compiler: {
-    swcMinify: true,
-    react: {
-      throwIfNamespace: false
-    }
   }
 };
 
