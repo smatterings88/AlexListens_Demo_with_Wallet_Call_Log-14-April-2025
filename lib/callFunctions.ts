@@ -24,69 +24,48 @@ interface CallCallbacks {
   onDebugMessage?: (message: UltravoxExperimentalMessageEvent) => void;
 }
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
-  let lastError: Error | null = null;
-  let retryDelay = 1000; // Start with 1 second delay
+async function createCall(callConfig: CallConfig, showDebugMessages?: boolean): Promise<JoinUrlResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      console.log(`Attempt ${attempt + 1}/${maxRetries} to fetch ${url}`);
-      
-      // Add timeout and keep-alive to the request
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-      
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          ...options.headers,
-          'Connection': 'keep-alive',
-          'Keep-Alive': 'timeout=30, max=100'
-        },
-        // Add cache control
-        cache: 'no-cache',
-        credentials: 'same-origin'
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (response.ok) {
-        return response;
-      }
+  try {
+    if(showDebugMessages) {
+      console.log(`Using model ${callConfig.model}`);
+    }
 
+    const response = await fetch(`/api/ultravox`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ...callConfig }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      
-      // Check if we should retry based on the error type
-      const shouldRetry = attempt < maxRetries - 1 && (
-        error instanceof TypeError || // Network errors
-        lastError.message.includes('socket') || // Socket errors
-        lastError.message.includes('network') || // Network errors
-        lastError.message.includes('timeout') // Timeout errors
-      );
-
-      if (!shouldRetry) {
-        throw lastError;
-      }
-
-      console.warn(`Attempt ${attempt + 1} failed:`, {
-        error: lastError.message,
-        cause: lastError.cause
-      });
-
-      // Exponential backoff with jitter
-      const jitter = Math.random() * 1000;
-      const delay = retryDelay + jitter;
-      console.log(`Retrying in ${Math.round(delay)}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      retryDelay *= 2; // Double the delay for next attempt
     }
-  }
 
-  throw lastError;
+    const data: JoinUrlResponse = await response.json();
+
+    if(showDebugMessages) {
+      console.log(`Call created. Join URL: ${data.joinUrl}`);
+    }
+    
+    return data;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.error('Error creating call:', error);
+    
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timeout: Failed to create call within 15 seconds');
+    }
+    
+    throw error;
+  }
 }
 
 function parseDuration(duration: string): number {
@@ -123,33 +102,6 @@ export function toggleMute(role: Role): void {
     uvSession.isMicMuted ? uvSession.unmuteMic() : uvSession.muteMic();
   } else {
     uvSession.isSpeakerMuted ? uvSession.unmuteSpeaker() : uvSession.muteSpeaker();
-  }
-}
-
-async function createCall(callConfig: CallConfig, showDebugMessages?: boolean): Promise<JoinUrlResponse> {
-  try {
-    if(showDebugMessages) {
-      console.log(`Using model ${callConfig.model}`);
-    }
-
-    const response = await fetchWithRetry(`/api/ultravox`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ...callConfig }),
-    });
-
-    const data: JoinUrlResponse = await response.json();
-
-    if(showDebugMessages) {
-      console.log(`Call created. Join URL: ${data.joinUrl}`);
-    }
-    
-    return data;
-  } catch (error) {
-    console.error('Error creating call:', error);
-    throw error;
   }
 }
 
