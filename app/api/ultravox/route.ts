@@ -1,28 +1,68 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { CallConfig } from '@/lib/types';
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
   let lastError: Error | null = null;
-  
+  let retryDelay = 1000; // Start with 1 second delay
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      console.log(`Attempt ${attempt + 1}/${maxRetries} to fetch ${url}`);
+      
+      // Add timeout to the request
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          ...options.headers,
+          'Connection': 'keep-alive',
+          'Keep-Alive': 'timeout=30, max=100'
+        },
+        // Add cache control
+        cache: 'no-cache',
+        credentials: 'same-origin'
+      });
+      
+      clearTimeout(timeoutId);
+      
       if (response.ok) {
         return response;
       }
-      // If response is not ok, throw to trigger retry
-      throw new Error(`HTTP error! status: ${response.status}`);
+
+      const errorText = await response.text();
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries - 1) {
-        // Calculate delay with exponential backoff (1s, 2s, 4s)
-        const delay = Math.pow(2, attempt) * 1000;
-        console.log(`Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+      
+      // Check if we should retry based on the error type
+      const shouldRetry = attempt < maxRetries - 1 && (
+        error instanceof TypeError || // Network errors
+        lastError.message.includes('socket') || // Socket errors
+        lastError.message.includes('network') || // Network errors
+        lastError.message.includes('timeout') // Timeout errors
+      );
+
+      if (!shouldRetry) {
+        throw lastError;
       }
+
+      console.warn(`Attempt ${attempt + 1} failed:`, {
+        error: lastError.message,
+        cause: lastError.cause
+      });
+
+      // Exponential backoff with jitter
+      const jitter = Math.random() * 1000;
+      const delay = retryDelay + jitter;
+      console.log(`Retrying in ${Math.round(delay)}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      retryDelay *= 2; // Double the delay for next attempt
     }
   }
-  
+
   throw lastError;
 }
 
@@ -31,7 +71,6 @@ export async function POST(request: NextRequest) {
     const body: CallConfig = await request.json();
     console.log('Attempting to call Ultravox API...');
 
-    // Check if API key exists
     if (!process.env.ULTRAVOX_API_KEY) {
       console.error('Missing ULTRAVOX_API_KEY environment variable');
       return NextResponse.json(
@@ -56,7 +95,11 @@ export async function POST(request: NextRequest) {
     console.error('Error in API route:', error);
     if (error instanceof Error) {
       return NextResponse.json(
-        { error: 'Error calling Ultravox API', details: error.message },
+        { 
+          error: 'Error calling Ultravox API', 
+          details: error.message,
+          cause: error.cause ? String(error.cause) : undefined
+        },
         { status: 500 }
       );
     } else {
